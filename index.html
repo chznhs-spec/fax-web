@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FAX – VLČR</title>
+<style>
+@font-face { font-family: "W95FA"; src: url("W95FA.otf") format("opentype"); }
+:root { --face:#d4d0c8; --hi:#fff; --sh:#808080; --dk:#404040; --navy:#000080; --ink:#000; }
+* { box-sizing: border-box; font-family: "W95FA", Tahoma, "MS Sans Serif", sans-serif; font-size: 11pt; }
+html, body { margin: 0; background: #fff; color: var(--ink); }
+header { display: flex; align-items: center; gap: 20px; padding: 14px 24px; border-bottom: 2px solid var(--sh); box-shadow: 0 2px 0 var(--hi); }
+header h1 { margin: 0; font-size: 44pt; font-style: italic; font-weight: bold; color: var(--navy); letter-spacing: 2px; line-height: 1; }
+header img { height: 56px; width: auto; }
+header .who { margin-left: auto; text-align: right; }
+main { padding: 24px; max-width: none; width: 100%; }
+.panel { background: var(--face); border: 2px solid; border-color: var(--hi) var(--dk) var(--dk) var(--hi); padding: 16px; margin-bottom: 20px; }
+.panel > h2 { margin: -16px -16px 14px; padding: 4px 8px; background: var(--navy); color: #fff; font-size: 11pt; }
+.field { margin-bottom: 12px; }
+label.t { display: block; margin-bottom: 4px; font-weight: bold; }
+input[type=text], input[type=password], textarea { width: 100%; padding: 6px; background: #fff; border: 2px solid; border-color: var(--sh) var(--hi) var(--hi) var(--sh); outline: none; }
+textarea { height: 220px; resize: vertical; font-family: "Courier New", monospace; font-size: 11pt; }
+.login { max-width: 420px; }
+.users { display: flex; flex-wrap: wrap; gap: 8px 24px; background: #fff; padding: 10px; border: 2px solid; border-color: var(--sh) var(--hi) var(--hi) var(--sh); }
+.users label { cursor: pointer; display: flex; align-items: center; gap: 6px; }
+button { background: var(--face); border: 2px solid; border-color: var(--hi) var(--dk) var(--dk) var(--hi); padding: 8px 24px; font-weight: bold; cursor: pointer; }
+button:active { border-color: var(--dk) var(--hi) var(--hi) var(--dk); padding: 9px 23px 7px 25px; }
+button:disabled { color: var(--sh); cursor: not-allowed; }
+button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 1px dotted #000; outline-offset: 2px; }
+.row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.stav { padding: 8px; background: #ffffe1; border: 1px solid var(--sh); margin-top: 12px; min-height: 2.2em; }
+.stav.err { background: #ffe1e1; }
+.hidden { display: none; }
+@media (max-width: 600px) { header h1 { font-size: 32pt; } header img { height: 44px; } main { padding: 12px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>FAX</h1>
+  <img src="logo_VLCR.png" alt="VLČR">
+  <div class="who hidden" id="who"><span id="whoName"></span><br><button id="logout" type="button">Odhlásit</button></div>
+</header>
+
+<main>
+  <section class="panel login" id="loginView">
+    <h2>Přihlášení</h2>
+    <div class="field"><label class="t" for="user">Jméno</label><input type="text" id="user" autocomplete="username"></div>
+    <div class="field"><label class="t" for="pass">Heslo</label><input type="password" id="pass" autocomplete="current-password"></div>
+    <button id="loginBtn" type="button">Přihlásit</button>
+    <div class="stav hidden" id="loginMsg"></div>
+  </section>
+
+  <section class="panel hidden" id="sendView">
+    <h2>Nová zpráva</h2>
+    <div class="field">
+      <label class="t">Komu</label>
+      <div class="users" id="users"></div>
+    </div>
+    <div class="field">
+      <label class="t" for="text">Zpráva</label>
+      <textarea id="text" maxlength="5000"></textarea>
+    </div>
+    <div class="row">
+      <span id="count">0 / 5000</span>
+      <button id="sendBtn" type="button">Odeslat FAX</button>
+    </div>
+    <div class="stav" id="sendMsg">Vyberte příjemce a napište zprávu.</div>
+  </section>
+</main>
+
+<script>
+// Po nasazení Apps Scriptu sem vložte adresu webové aplikace (končí na /exec).
+const API_URL = "https://script.google.com/macros/s/AKfycbyjPlP14oWPcS1k27sBvDastDwLtmD6_gY72eb9Wk_lOyvsNqC4MKH-1AE24wM1wukQ/exec";
+const $ = id => document.getElementById(id);
+let creds = null;
+
+async function api(action, extra) {
+  const r = await fetch(API_URL, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain" },   // bez preflightu – Apps Script ho neumí
+    body: JSON.stringify({ action, user: creds.user, password: creds.password, ...extra })
+  });
+  return r.json();
+}
+
+function msg(el, text, err) {
+  el.textContent = text; el.classList.remove("hidden"); el.classList.toggle("err", !!err);
+}
+
+async function login(user, password, silent) {
+  creds = { user, password };
+  $("loginBtn").disabled = true;
+  try {
+    const d = await api("login");
+    if (!d.ok) throw new Error(d.error);
+    try { sessionStorage.setItem("fax", JSON.stringify(creds)); } catch (e) {}
+    zobrazOdesilani(d.users);
+  } catch (e) {
+    creds = null;
+    if (!silent) msg($("loginMsg"), e.message.includes("fetch") ? "Nelze se spojit se serverem." : e.message, true);
+  } finally { $("loginBtn").disabled = false; }
+}
+
+function zobrazOdesilani(users) {
+  $("loginView").classList.add("hidden");
+  $("sendView").classList.remove("hidden");
+  $("who").classList.remove("hidden");
+  $("whoName").textContent = "Přihlášen: " + creds.user;
+  const box = $("users"); box.innerHTML = "";
+  const all = document.createElement("label");
+  all.innerHTML = '<input type="checkbox" id="all"> <b>Vybrat všechny</b>';
+  box.appendChild(all);
+  users.filter(u => u !== creds.user).concat(creds.user).forEach(u => {
+    const l = document.createElement("label");
+    const c = document.createElement("input"); c.type = "checkbox"; c.value = u; c.className = "rcpt";
+    l.append(c, document.createTextNode(" " + u + (u === creds.user ? " (já)" : "")));
+    box.appendChild(l);
+  });
+  $("all").onchange = e => document.querySelectorAll(".rcpt").forEach(c => c.checked = e.target.checked);
+}
+
+$("loginBtn").onclick = () => login($("user").value.trim(), $("pass").value);
+$("pass").onkeydown = e => { if (e.key === "Enter") $("loginBtn").click(); };
+
+$("logout").onclick = () => {
+  try { sessionStorage.removeItem("fax"); } catch (e) {}
+  creds = null; $("pass").value = "";
+  $("sendView").classList.add("hidden"); $("who").classList.add("hidden"); $("loginView").classList.remove("hidden");
+};
+
+$("text").oninput = () => { $("count").textContent = $("text").value.length + " / 5000"; };
+
+$("sendBtn").onclick = async () => {
+  const to = [...document.querySelectorAll(".rcpt:checked")].map(c => c.value);
+  const text = $("text").value.trim();
+  if (!to.length) return msg($("sendMsg"), "Vyberte aspoň jednoho příjemce.", true);
+  if (!text) return msg($("sendMsg"), "Napište zprávu.", true);
+  $("sendBtn").disabled = true; msg($("sendMsg"), "Odesílá se…");
+  try {
+    const d = await api("send", { to, text });
+    if (!d.ok) throw new Error(d.error);
+    msg($("sendMsg"), "Odesláno " + d.cas + " – příjemci: " + to.join(", "));
+    $("text").value = ""; $("count").textContent = "0 / 5000";
+  } catch (e) { msg($("sendMsg"), e.message, true); }
+  finally { $("sendBtn").disabled = false; }
+};
+
+try {
+  const s = JSON.parse(sessionStorage.getItem("fax") || "null");
+  if (s) login(s.user, s.password, true);
+} catch (e) {}
+</script>
+</body>
+</html>
